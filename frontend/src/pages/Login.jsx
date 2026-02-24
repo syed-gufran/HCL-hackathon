@@ -119,7 +119,6 @@ export default function Login({ onLoginSuccess }) {
         </div>
 
         <div className="relative z-10 text-xs font-mono text-zinc-500 bg-[#0B0B0F]/50 w-fit p-2 rounded backdrop-blur-sm">
-          <p>© 2026 SupportEngine Platform. Demo Environment.</p>
         </div>
       </div>
 

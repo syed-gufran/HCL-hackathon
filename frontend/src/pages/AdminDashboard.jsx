@@ -4,13 +4,13 @@ import { Terminal, LayoutDashboard, Ticket as TicketIcon, LogOut, Clock, AlertCi
 import { COLORS } from '../data/mockData';
 import { updateAdminTicket } from '../api/admin';
 
-export default function AdminDashboard({ tickets, setTickets, onLogout, analytics, loading, error, onRefresh, token }) {
+export default function AdminDashboard({ tickets, setTickets, onLogout, analytics, loading, error, onRefresh, token, currentUser }) {
   const [currentView, setCurrentView] = useState('dashboard');
   const [selectedTicket, setSelectedTicket] = useState(null);
   const [editForm, setEditForm] = useState({ status: '', resolution: '' });
   const [saveError, setSaveError] = useState('');
   const [saving, setSaving] = useState(false);
-  const [filters, setFilters] = useState({ status: 'All', category: 'All', priority: 'All', q: '' });
+  const [filters, setFilters] = useState({ status: 'All', category: 'All', priority: 'All', q: '', fromDate: '', toDate: '' });
 
   const pendingCount = analytics?.pending_tickets ?? tickets.filter((t) => t.status !== 'Resolved').length;
   const resolvedCount = analytics?.resolved_tickets ?? tickets.filter((t) => t.status === 'Resolved').length;
@@ -36,6 +36,8 @@ export default function AdminDashboard({ tickets, setTickets, onLogout, analytic
       if (filters.status !== 'All' && t.status !== filters.status) return false;
       if (filters.category !== 'All' && t.category !== filters.category) return false;
       if (filters.priority !== 'All' && t.priority !== filters.priority) return false;
+      if (filters.fromDate && t.date && t.date < filters.fromDate) return false;
+      if (filters.toDate && t.date && t.date > filters.toDate) return false;
       if (filters.q) {
         const q = filters.q.toLowerCase().trim();
         if (!idText.includes(q) && !textBlob.includes(q)) return false;
@@ -81,7 +83,7 @@ export default function AdminDashboard({ tickets, setTickets, onLogout, analytic
       <div className="w-64 bg-[#0B0B0F] border-r border-zinc-800/60 text-zinc-300 flex flex-col h-full shrink-0">
         <div className="p-6 border-b border-zinc-800/60 flex items-center gap-3">
           <div className="w-8 h-8 bg-white rounded-md flex items-center justify-center"><Terminal size={18} className="text-black" /></div>
-          <div><h2 className="text-sm font-bold text-white tracking-tight">SupportEngine</h2><p className="font-mono text-[10px] text-zinc-500 uppercase tracking-widest mt-0.5">Admin Portal</p></div>
+          <div><h2 className="text-sm font-bold text-white tracking-tight">{currentUser?.name || 'Admin User'}</h2><p className="font-mono text-[10px] text-zinc-500 uppercase tracking-widest mt-0.5">Admin Portal</p></div>
         </div>
         <nav className="flex-1 p-4 space-y-1">
           <button onClick={() => setCurrentView('dashboard')} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-md transition-all text-sm font-medium ${currentView === 'dashboard' ? 'bg-zinc-800/50 text-white' : 'text-zinc-400 hover:bg-zinc-800/30'}`}><LayoutDashboard size={18} /><span>Overview</span></button>
@@ -179,7 +181,7 @@ export default function AdminDashboard({ tickets, setTickets, onLogout, analytic
                 <RefreshCw size={14} /> Refresh
               </button>
             </div>
-            <div className="grid grid-cols-4 gap-3 mb-4">
+            <div className="grid grid-cols-6 gap-3 mb-4">
               <select value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })} className="bg-[#111115] border border-zinc-800 rounded px-3 py-2 text-xs">
                 <option>All</option><option>Open</option><option>In Progress</option><option>Resolved</option>
               </select>
@@ -189,16 +191,18 @@ export default function AdminDashboard({ tickets, setTickets, onLogout, analytic
               <select value={filters.priority} onChange={(e) => setFilters({ ...filters, priority: e.target.value })} className="bg-[#111115] border border-zinc-800 rounded px-3 py-2 text-xs">
                 <option>All</option><option>low</option><option>med</option><option>high</option>
               </select>
+              <input type="date" value={filters.fromDate} onChange={(e) => setFilters({ ...filters, fromDate: e.target.value })} className="bg-[#111115] border border-zinc-800 rounded px-3 py-2 text-xs" />
+              <input type="date" value={filters.toDate} onChange={(e) => setFilters({ ...filters, toDate: e.target.value })} className="bg-[#111115] border border-zinc-800 rounded px-3 py-2 text-xs" />
               <input value={filters.q} onChange={(e) => setFilters({ ...filters, q: e.target.value })} placeholder="Search by ticket ID or text (e.g. T-120)" className="bg-[#111115] border border-zinc-800 rounded px-3 py-2 text-xs" />
             </div>
             <div className="bg-[#111115] rounded-lg border border-zinc-800 flex-1 overflow-auto">
               <table className="w-full text-left">
-                <thead className="bg-[#0B0B0F] border-b border-zinc-800"><tr><th className="p-4 text-xs text-zinc-500">ID</th><th className="p-4 text-xs text-zinc-500">Issue</th><th className="p-4 text-xs text-zinc-500">Category</th><th className="p-4 text-xs text-zinc-500">Priority</th><th className="p-4 text-xs text-zinc-500">Status</th></tr></thead>
+                <thead className="bg-[#0B0B0F] border-b border-zinc-800"><tr><th className="p-4 text-xs text-zinc-500">ID</th><th className="p-4 text-xs text-zinc-500">Issue</th><th className="p-4 text-xs text-zinc-500">Category</th><th className="p-4 text-xs text-zinc-500">Date</th><th className="p-4 text-xs text-zinc-500">Priority</th><th className="p-4 text-xs text-zinc-500">Status</th><th className="p-4 text-xs text-zinc-500">Resolved By</th></tr></thead>
                 <tbody className="divide-y divide-zinc-800/60">
                   {filteredTickets.map((t) => (
                     <tr key={t.id} onClick={() => handleRowClick(t)} className="cursor-pointer transition-colors hover:bg-sky-500/15 hover:ring-1 hover:ring-sky-400/30">
-                      <td className="p-4 font-mono text-xs text-zinc-400">{t.id}</td><td className="p-4 text-sm">{t.issue}</td><td className="p-4 text-xs text-zinc-300">{t.category}</td><td className="p-4 text-xs text-zinc-300 uppercase">{t.priority}</td>
-                      <td className="p-4"><span className="px-2 py-1 text-xs border border-zinc-700 bg-zinc-800 rounded">{t.status}</span></td>
+                      <td className="p-4 font-mono text-xs text-zinc-400">{t.id}</td><td className="p-4 text-sm">{t.issue}</td><td className="p-4 text-xs text-zinc-300">{t.category}</td><td className="p-4 text-xs text-zinc-300">{t.date || '-'}</td><td className="p-4 text-xs text-zinc-300 uppercase">{t.priority}</td>
+                      <td className="p-4"><span className="px-2 py-1 text-xs border border-zinc-700 bg-zinc-800 rounded">{t.status}</span></td><td className="p-4 text-xs text-zinc-300">{t.resolvedBy || '-'}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -211,6 +215,10 @@ export default function AdminDashboard({ tickets, setTickets, onLogout, analytic
                   <div className="flex justify-between items-center mb-6"><h2 className="text-lg font-bold text-white">{selectedTicket.issue}</h2><button onClick={() => setSelectedTicket(null)}><X size={18} /></button></div>
                   <div className="flex-1 overflow-y-auto space-y-6">
                     <div><label className="text-xs text-zinc-500 block mb-2">Description</label><div className="bg-[#111115] p-3 rounded border border-zinc-800 text-sm">{selectedTicket.description}</div></div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div><label className="text-xs text-zinc-500 block mb-2">Ticket Date</label><div className="bg-[#111115] p-3 rounded border border-zinc-800 text-sm">{selectedTicket.date || '-'}</div></div>
+                      <div><label className="text-xs text-zinc-500 block mb-2">Resolved By</label><div className="bg-[#111115] p-3 rounded border border-zinc-800 text-sm">{selectedTicket.resolvedBy || '-'}</div></div>
+                    </div>
                     <div><label className="text-xs text-zinc-500 block mb-2 flex items-center gap-2"><Terminal size={14} className="text-indigo-400" /> NLP Suggestion</label><div className="bg-indigo-500/10 p-4 border border-indigo-500/20 rounded font-mono text-sm text-indigo-300">{`> ${selectedTicket.ai_suggestion}`}</div></div>
                     <div><label className="text-xs text-zinc-500 block mb-2">Status</label><div className="flex gap-2">{['Open', 'In Progress', 'Resolved'].map((s) => <button key={s} onClick={() => setEditForm({ ...editForm, status: s })} className={`flex-1 py-2 rounded text-sm border ${editForm.status === s ? 'bg-white text-black' : 'border-zinc-800 text-zinc-400'}`}>{s}</button>)}</div></div>
                     <div><label className="text-xs text-zinc-500 block mb-2">Resolution Note</label><textarea value={editForm.resolution} onChange={(e) => setEditForm({ ...editForm, resolution: e.target.value })} className="w-full p-3 bg-[#111115] border border-zinc-800 rounded text-sm text-white resize-none h-24" /></div>

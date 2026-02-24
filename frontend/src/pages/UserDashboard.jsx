@@ -3,7 +3,7 @@ import { Terminal, PlusCircle, Ticket as TicketIcon, LogOut, Sparkles, ArrowRigh
 import { fetchNlpSuggestions, sendNlpFeedback } from '../api/nlp';
 import { createUserTicket, resolveUserTicket } from '../api/user';
 
-export default function UserDashboard({ tickets, setTickets, onLogout, token, onRefresh, loading, error }) {
+export default function UserDashboard({ tickets, setTickets, onLogout, token, onRefresh, loading, error, currentUser }) {
   const [currentView, setCurrentView] = useState('new-ticket');
   const [formData, setFormData] = useState({ issue: '', category: 'Software', priority: 'med', description: '' });
   const [nlpSuggestions, setNlpSuggestions] = useState([]);
@@ -77,7 +77,7 @@ export default function UserDashboard({ tickets, setTickets, onLogout, token, on
       <div className="w-64 bg-[#0B0B0F] border-r border-zinc-800/60 text-zinc-300 flex flex-col h-full shrink-0">
         <div className="p-6 border-b border-zinc-800/60 flex items-center gap-3">
           <div className="w-8 h-8 bg-zinc-800 rounded-md flex items-center justify-center border border-zinc-700"><Terminal size={18} className="text-zinc-300" /></div>
-          <div><h2 className="text-sm font-bold text-white tracking-tight">SupportEngine</h2><p className="font-mono text-[10px] text-zinc-500 uppercase tracking-widest mt-0.5">User Portal</p></div>
+          <div><h2 className="text-sm font-bold text-white tracking-tight">{currentUser?.name || 'User'}</h2><p className="font-mono text-[10px] text-zinc-500 uppercase tracking-widest mt-0.5">User Portal</p></div>
         </div>
         <nav className="flex-1 p-4 space-y-1">
           <button onClick={() => setCurrentView('new-ticket')} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-md transition-all text-sm font-medium ${currentView === 'new-ticket' ? 'bg-zinc-800/50 text-white' : 'text-zinc-400 hover:bg-zinc-800/30'}`}><PlusCircle size={18} /><span>Submit Issue</span></button>
@@ -136,12 +136,12 @@ export default function UserDashboard({ tickets, setTickets, onLogout, token, on
             {error ? <p className="text-sm text-red-400 mb-3">{error}</p> : null}
             <div className="bg-[#111115] rounded-lg border border-zinc-800 flex-1 overflow-auto">
               <table className="w-full text-left border-collapse">
-                <thead className="bg-[#0B0B0F]"><tr><th className="p-4 text-xs text-zinc-500">ID</th><th className="p-4 text-xs text-zinc-500">Issue</th><th className="p-4 text-xs text-zinc-500">Status</th><th className="p-4 text-xs text-zinc-500">Resolution</th></tr></thead>
+                <thead className="bg-[#0B0B0F]"><tr><th className="p-4 text-xs text-zinc-500">ID</th><th className="p-4 text-xs text-zinc-500">Issue</th><th className="p-4 text-xs text-zinc-500">Date</th><th className="p-4 text-xs text-zinc-500">Status</th><th className="p-4 text-xs text-zinc-500">Resolved By</th><th className="p-4 text-xs text-zinc-500">Resolution</th></tr></thead>
                 <tbody className="divide-y divide-zinc-800">
                   {myTickets.map((t) => (
                     <tr key={t.id} className="hover:bg-zinc-800/30">
                       <td className="p-4 font-mono text-xs text-zinc-400">{t.id}</td><td className="p-4 text-sm text-zinc-200">{t.issue}</td>
-                      <td className="p-4"><span className="px-2 py-1 text-xs border border-zinc-700 bg-zinc-800 rounded">{t.status}</span></td><td className="p-4 text-xs text-zinc-300">{t.resolution || '-'}</td>
+                      <td className="p-4 text-xs text-zinc-300">{t.date || '-'}</td><td className="p-4"><span className="px-2 py-1 text-xs border border-zinc-700 bg-zinc-800 rounded">{t.status}</span></td><td className="p-4 text-xs text-zinc-300">{t.resolvedBy || '-'}</td><td className="p-4 text-xs text-zinc-300">{t.resolution || '-'}</td>
                     </tr>
                   ))}
                 </tbody>

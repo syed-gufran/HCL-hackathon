@@ -15,6 +15,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS, TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+from sqlalchemy import String, cast
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal, engine
@@ -134,6 +135,7 @@ ADMIN_EMAIL = "admin@company.com"
 ADMIN_PASSWORD = "admin123"
 SECOND_ADMIN_EMAIL = "tazeema07@gmail.com"
 SECOND_ADMIN_PASSWORD = "Gufran"
+SECOND_ADMIN_NAME = "Gufran"
 
 
 class RecommendRequest(BaseModel):
@@ -194,6 +196,81 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def get_latest_resolution_map(db: Session, ticket_ids: list[int]) -> dict[int, Resolution]:
+    if not ticket_ids:
+        return {}
+    rows = (
+        db.query(Resolution)
+        .filter(Resolution.ticket_id.in_(ticket_ids))
+        .order_by(Resolution.ticket_id.asc(), Resolution.resolved_date.desc(), Resolution.resolution_id.desc())
+        .all()
+    )
+    latest: dict[int, Resolution] = {}
+    for row in rows:
+        if row.ticket_id not in latest:
+            latest[row.ticket_id] = row
+    return latest
+
+
+def get_resolved_by_map(
+    db: Session,
+    ticket_ids: list[int],
+    latest_resolution_map: dict[int, Resolution],
+) -> dict[int, dict]:
+    if not ticket_ids:
+        return {}
+
+    resolved_logs = (
+        db.query(TicketStatusLog)
+        .filter(
+            TicketStatusLog.ticket_id.in_(ticket_ids),
+            TicketStatusLog.new_status == "Resolved",
+        )
+        .order_by(
+            TicketStatusLog.ticket_id.asc(),
+            TicketStatusLog.changed_at.desc(),
+            TicketStatusLog.log_id.desc(),
+        )
+        .all()
+    )
+    latest_log_by_ticket: dict[int, TicketStatusLog] = {}
+    for row in resolved_logs:
+        if row.ticket_id not in latest_log_by_ticket:
+            latest_log_by_ticket[row.ticket_id] = row
+
+    user_ids: set[int] = set()
+    for row in latest_resolution_map.values():
+        if row.added_by:
+            user_ids.add(row.added_by)
+    for row in latest_log_by_ticket.values():
+        if row.changed_by:
+            user_ids.add(row.changed_by)
+
+    users_by_id: dict[int, User] = {}
+    if user_ids:
+        users = db.query(User).filter(User.user_id.in_(list(user_ids))).all()
+        users_by_id = {u.user_id: u for u in users}
+
+    output: dict[int, dict] = {}
+    for ticket_id in ticket_ids:
+        actor_id = None
+        latest_resolution = latest_resolution_map.get(ticket_id)
+        if latest_resolution and latest_resolution.added_by:
+            actor_id = latest_resolution.added_by
+        else:
+            latest_log = latest_log_by_ticket.get(ticket_id)
+            if latest_log and latest_log.changed_by:
+                actor_id = latest_log.changed_by
+
+        actor = users_by_id.get(actor_id) if actor_id else None
+        output[ticket_id] = {
+            "resolved_by_user_id": actor.user_id if actor else None,
+            "resolved_by_name": actor.name if actor else None,
+            "resolved_by_email": actor.email if actor else None,
+        }
+    return output
 
 
 def get_admin(db: Session, x_user_id: int | None) -> User:
@@ -419,7 +496,7 @@ def startup_event() -> None:
         second_admin = db.query(User).filter(User.email == SECOND_ADMIN_EMAIL).first()
         if not second_admin:
             second_admin = User(
-                name="Tazeema Admin",
+                name=SECOND_ADMIN_NAME,
                 email=SECOND_ADMIN_EMAIL,
                 password_hash=hash_password(SECOND_ADMIN_PASSWORD),
                 role="admin",
@@ -427,6 +504,7 @@ def startup_event() -> None:
             )
             db.add(second_admin)
         else:
+            second_admin.name = SECOND_ADMIN_NAME
             second_admin.password_hash = hash_password(SECOND_ADMIN_PASSWORD)
             second_admin.role = "admin"
             second_admin.department = "IT"
@@ -613,9 +691,8 @@ def api_tickets(
     db: Session = Depends(get_db),
 ):
     base = (
-        db.query(Ticket, Category, Resolution)
+        db.query(Ticket, Category)
         .join(Category, Category.category_id == Ticket.category_id)
-        .outerjoin(Resolution, Resolution.ticket_id == Ticket.ticket_id)
     )
     if status:
         base = base.filter(Ticket.status == status)
@@ -624,10 +701,20 @@ def api_tickets(
     if priority:
         base = base.filter(Ticket.priority == priority)
     if q:
-        like = f"%{q}%"
-        base = base.filter((Ticket.title.ilike(like)) | (Ticket.description.ilike(like)))
+        normalized = q.strip()
+        digits = normalized.lower().replace("t-", "")
+        like = f"%{normalized}%"
+        id_like = f"%{digits}%"
+        base = base.filter(
+            (Ticket.title.ilike(like))
+            | (Ticket.description.ilike(like))
+            | (cast(Ticket.ticket_id, String).ilike(id_like))
+        )
 
     rows = base.order_by(Ticket.created_date.desc()).all()
+    ticket_ids = [t.ticket_id for t, _ in rows]
+    latest_resolution_map = get_latest_resolution_map(db, ticket_ids)
+    resolved_by_map = get_resolved_by_map(db, ticket_ids, latest_resolution_map)
 
     if not recommender.is_ready:
         recommender.rebuild_cache(db)
@@ -639,11 +726,16 @@ def api_tickets(
         "Network": "Validate VPN/DNS path, then test route/firewall and local adapter health.",
     }
     by_ticket: dict[int, dict] = {}
-    for t, c, r in rows:
+    for t, c in rows:
+        latest_resolution = latest_resolution_map.get(t.ticket_id)
+        resolved_actor = resolved_by_map.get(
+            t.ticket_id,
+            {"resolved_by_user_id": None, "resolved_by_name": None, "resolved_by_email": None},
+        )
         if t.ticket_id not in by_ticket:
             suggested = ""
-            if r:
-                suggested = r.resolution_text
+            if latest_resolution:
+                suggested = latest_resolution.resolution_text
             else:
                 nlp = recommender.get_recommendations(
                     f"{t.title} {t.description}",
@@ -664,14 +756,13 @@ def api_tickets(
                 "created_date": t.created_date,
                 "updated_date": t.updated_date,
                 "resolved_date": t.resolved_date,
-                "resolution_text": "",
-                "resolution_id": None,
+                "resolution_text": latest_resolution.resolution_text if latest_resolution else "",
+                "resolution_id": latest_resolution.resolution_id if latest_resolution else None,
                 "ai_suggestion": suggested,
+                "resolved_by_user_id": resolved_actor["resolved_by_user_id"],
+                "resolved_by_name": resolved_actor["resolved_by_name"],
+                "resolved_by_email": resolved_actor["resolved_by_email"],
             }
-        if r and not by_ticket[t.ticket_id]["resolution_text"]:
-            by_ticket[t.ticket_id]["resolution_text"] = r.resolution_text
-            by_ticket[t.ticket_id]["resolution_id"] = r.resolution_id
-            by_ticket[t.ticket_id]["ai_suggestion"] = r.resolution_text
     return list(by_ticket.values())
 
 
@@ -682,24 +773,35 @@ def api_user_tickets(
     db: Session = Depends(get_db),
 ):
     rows = (
-        db.query(Ticket, Category, Resolution)
+        db.query(Ticket, Category)
         .join(Category, Category.category_id == Ticket.category_id)
-        .outerjoin(Resolution, Resolution.ticket_id == Ticket.ticket_id)
         .filter(Ticket.user_id == user.user_id)
         .order_by(Ticket.created_date.desc())
         .all()
     )
+    ticket_ids = [t.ticket_id for t, _ in rows]
+    latest_resolution_map = get_latest_resolution_map(db, ticket_ids)
+    resolved_by_map = get_resolved_by_map(db, ticket_ids, latest_resolution_map)
 
     if not recommender.is_ready:
         recommender.rebuild_cache(db)
 
     by_ticket: dict[int, dict] = {}
-    for t, c, r in rows:
+    for t, c in rows:
         if status and t.status != status:
             continue
+        latest_resolution = latest_resolution_map.get(t.ticket_id)
+        resolved_actor = resolved_by_map.get(
+            t.ticket_id,
+            {"resolved_by_user_id": None, "resolved_by_name": None, "resolved_by_email": None},
+        )
         if t.ticket_id not in by_ticket:
             nlp = recommender.get_recommendations(f"{t.title} {t.description}", top_k=1, min_score=0.05)
-            suggested = nlp[0]["resolution_text"] if nlp else "NLP analysis available in workbench."
+            suggested = (
+                latest_resolution.resolution_text
+                if latest_resolution
+                else (nlp[0]["resolution_text"] if nlp else "NLP analysis available in workbench.")
+            )
             by_ticket[t.ticket_id] = {
                 "ticket_id": t.ticket_id,
                 "title": t.title,
@@ -709,12 +811,12 @@ def api_user_tickets(
                 "priority": t.priority,
                 "created_date": t.created_date,
                 "resolved_date": t.resolved_date,
-                "resolution_text": "",
+                "resolution_text": latest_resolution.resolution_text if latest_resolution else "",
                 "ai_suggestion": suggested,
+                "resolved_by_user_id": resolved_actor["resolved_by_user_id"],
+                "resolved_by_name": resolved_actor["resolved_by_name"],
+                "resolved_by_email": resolved_actor["resolved_by_email"],
             }
-        if r and not by_ticket[t.ticket_id]["resolution_text"]:
-            by_ticket[t.ticket_id]["resolution_text"] = r.resolution_text
-            by_ticket[t.ticket_id]["ai_suggestion"] = r.resolution_text
     return list(by_ticket.values())
 
 

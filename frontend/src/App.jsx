@@ -27,6 +27,8 @@ export default function App() {
     date: t.created_date?.split?.('T')?.[0] || '',
     ai_suggestion: t.ai_suggestion || t.resolution_text || 'Use guided troubleshooting for this category.',
     resolution: t.resolution_text || '',
+    resolvedBy: t.resolved_by_name || '',
+    resolvedByEmail: t.resolved_by_email || '',
     author: 'other',
   });
 
@@ -63,6 +65,8 @@ export default function App() {
         date: t.created_date?.split?.('T')?.[0] || '',
         ai_suggestion: t.ai_suggestion || t.resolution_text || 'Pending NLP recommendation.',
         resolution: t.resolution_text || '',
+        resolvedBy: t.resolved_by_name || '',
+        resolvedByEmail: t.resolved_by_email || '',
         author: 'me',
       }));
       setTickets(mapped);
@@ -112,6 +116,7 @@ export default function App() {
         error={adminError}
         onRefresh={() => loadAdminData(authState.token)}
         token={authState.token}
+        currentUser={authState.user}
       />
     );
   }
@@ -125,6 +130,7 @@ export default function App() {
       onRefresh={() => loadUserData(authState.token)}
       loading={userLoading}
       error={userError}
+      currentUser={authState.user}
     />
   );
 }
