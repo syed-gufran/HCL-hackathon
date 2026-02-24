@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>NLP Workbench</title>
+  <style>
+    :root {
+      --bg: #f6f8fb;
+      --card: #ffffff;
+      --ink: #0f172a;
+      --muted: #475569;
+      --brand: #0e7490;
+      --brand-2: #155e75;
+      --ok: #166534;
+      --warn: #92400e;
+      --bd: #dbe3ee;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Avenir Next", "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: radial-gradient(circle at top right, #dff6ff, transparent 40%), var(--bg);
+    }
+    .wrap { max-width: 1050px; margin: 36px auto; padding: 0 16px; }
+    .hero {
+      background: linear-gradient(125deg, #083344, #0e7490 55%, #22d3ee);
+      color: #fff;
+      padding: 22px;
+      border-radius: 16px;
+      box-shadow: 0 10px 30px rgba(2, 8, 23, 0.2);
+    }
+    .hero h1 { margin: 0 0 6px; font-size: 1.65rem; }
+    .hero p { margin: 0; opacity: 0.95; }
+    .grid {
+      display: grid;
+      gap: 14px;
+      margin-top: 14px;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--bd);
+      border-radius: 12px;
+      padding: 14px;
+      box-shadow: 0 4px 12px rgba(15, 23, 42, 0.04);
+    }
+    label { display: block; font-size: 0.86rem; color: var(--muted); margin-bottom: 5px; }
+    textarea, input, select, button {
+      width: 100%;
+      border-radius: 10px;
+      border: 1px solid #c9d4e3;
+      padding: 10px 11px;
+      font-size: 0.95rem;
+    }
+    textarea { min-height: 100px; resize: vertical; }
+    button {
+      cursor: pointer;
+      color: #fff;
+      border: none;
+      background: var(--brand);
+      margin-top: 10px;
+      font-weight: 600;
+    }
+    button:hover { background: var(--brand-2); }
+    .row { display: grid; gap: 10px; grid-template-columns: 1fr 1fr; }
+    .kpi { font-weight: 700; color: var(--ok); }
+    .out {
+      margin-top: 8px;
+      background: #f8fafc;
+      border: 1px dashed #cbd5e1;
+      border-radius: 10px;
+      padding: 10px;
+      max-height: 320px;
+      overflow: auto;
+      white-space: pre-wrap;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.82rem;
+    }
+    .hint { margin-top: 8px; color: var(--warn); font-size: 0.85rem; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="hero">
+      <h1>NLP Workbench</h1>
+      <p>Single page for recommendation, feedback, and TF-IDF cache control.</p>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <h3>1) Recommendation</h3>
+        <label>Ticket Text</label>
+        <textarea id="ticket_text">account synchronization issue after app update</textarea>
+        <div class="row">
+          <div>
+            <label>Top K</label>
+            <input id="top_k" type="number" min="1" max="10" value="3" />
+          </div>
+          <div>
+            <label>Min Score</label>
+            <input id="min_score" type="number" min="0" max="1" step="0.01" value="0.15" />
+          </div>
+        </div>
+        <button onclick="runRecommend()">Run Recommendation</button>
+        <div id="recommend_out" class="out"></div>
+      </div>
+
+      <div class="card">
+        <h3>2) Feedback</h3>
+        <label>Resolution ID</label>
+        <input id="resolution_id" type="number" min="1" value="1" />
+        <label>Helpful?</label>
+        <select id="helpful">
+          <option value="true">Helpful</option>
+          <option value="false">Not Helpful</option>
+        </select>
+        <button onclick="sendFeedback()">Submit Feedback</button>
+        <div id="feedback_out" class="out"></div>
+      </div>
+
+      <div class="card">
+        <h3>3) Cache Control</h3>
+        <div>Status: <span id="status_kpi" class="kpi">Loading...</span></div>
+        <label>Admin User ID</label>
+        <input id="admin_id" type="number" min="1" value="1" />
+        <button onclick="rebuildCache()">Rebuild TF-IDF Cache</button>
+        <button onclick="loadStatus()">Refresh Status</button>
+        <div id="cache_out" class="out"></div>
+        <div class="hint">Rebuild requires admin user id in <code>x-user-id</code> header.</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function pretty(data) {
+      return JSON.stringify(data, null, 2);
+    }
+
+    async function loadStatus() {
+      const res = await fetch('/api/nlp/status');
+      const data = await res.json();
+      document.getElementById('status_kpi').textContent = `${data.indexed_rows} indexed / ${data.verified_resolutions} verified`;
+      document.getElementById('cache_out').textContent = pretty(data);
+    }
+
+    async function runRecommend() {
+      const payload = {
+        ticket_text: document.getElementById('ticket_text').value,
+        top_k: Number(document.getElementById('top_k').value),
+        min_score: Number(document.getElementById('min_score').value)
+      };
+      const res = await fetch('/api/nlp/recommend', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      document.getElementById('recommend_out').textContent = pretty(data);
+    }
+
+    async function sendFeedback() {
+      const payload = {
+        resolution_id: Number(document.getElementById('resolution_id').value),
+        helpful: document.getElementById('helpful').value === 'true'
+      };
+      const res = await fetch('/api/nlp/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      document.getElementById('feedback_out').textContent = pretty(data);
+      loadStatus();
+    }
+
+    async function rebuildCache() {
+      const adminId = document.getElementById('admin_id').value;
+      const res = await fetch('/api/nlp/rebuild', {
+        method: 'POST',
+        headers: { 'x-user-id': adminId }
+      });
+      const data = await res.json();
+      document.getElementById('cache_out').textContent = pretty(data);
+      loadStatus();
+    }
+
+    loadStatus();
+  </script>
+</body>
+</html>
