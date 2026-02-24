@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import secrets
 from collections import Counter
@@ -24,10 +25,16 @@ from app.models import Base, Category, Resolution, Ticket, TicketStatusLog, User
 
 Base.metadata.create_all(bind=engine)
 
+default_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
+allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "")
+allowed_origins = [origin.strip() for origin in allowed_origins_env.split(",") if origin.strip()]
+if not allowed_origins:
+    allowed_origins = default_origins
+
 app = FastAPI(title="Tickets API")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
