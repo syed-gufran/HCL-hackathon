@@ -132,6 +132,8 @@ recommender = NLPRecommendationEngine(max_features=5000)
 auth_tokens: dict[str, int] = {}
 ADMIN_EMAIL = "admin@company.com"
 ADMIN_PASSWORD = "admin123"
+SECOND_ADMIN_EMAIL = "tazeema07@gmail.com"
+SECOND_ADMIN_PASSWORD = "Gufran"
 
 
 class RecommendRequest(BaseModel):
@@ -156,6 +158,30 @@ class ResolutionCreateRequest(BaseModel):
 class LoginRequest(BaseModel):
     email: str
     password: str
+    expected_role: str | None = None
+
+
+class RegisterRequest(BaseModel):
+    name: str = Field(min_length=2, max_length=100)
+    email: str = Field(min_length=5, max_length=150)
+    password: str = Field(min_length=6, max_length=255)
+    department: str = Field(default="General", min_length=2, max_length=100)
+
+
+class TicketUpdateRequest(BaseModel):
+    status: str
+    resolution: str | None = None
+
+
+class UserTicketCreateRequest(BaseModel):
+    issue: str = Field(min_length=3, max_length=200)
+    category: str = Field(min_length=3, max_length=50)
+    description: str = Field(min_length=8)
+    priority: str = "med"
+
+
+class UserTicketResolveRequest(BaseModel):
+    resolution: str = Field(min_length=3)
 
 
 def hash_password(password: str) -> str:
@@ -224,6 +250,15 @@ def seed_demo_data(db: Session, per_category: int = 30) -> dict:
     )
     db.add(admin)
     db.flush()
+    employee = User(
+        name="Employee User",
+        email="employee@company.com",
+        password_hash=hash_password("employee123"),
+        role="user",
+        department="Operations",
+    )
+    db.add(employee)
+    db.flush()
 
     category_names = ["Software", "Access", "Hardware", "Network"]
     categories: dict[str, Category] = {}
@@ -239,24 +274,36 @@ def seed_demo_data(db: Session, per_category: int = 30) -> dict:
             "Outlook freezes after update",
             "ERP client not responding",
             "Unable to install approved software",
+            "Blue screen after OS patch",
+            "Printer software queue stalled",
+            "Browser profile keeps resetting",
         ],
         "Access": [
             "SSO login denied",
             "SAP role missing for approvals",
             "Shared folder permission error",
             "MFA device not recognized",
+            "Service account token expired",
+            "New joiner cannot access HR portal",
+            "Role mapping mismatch in IAM",
         ],
         "Hardware": [
             "Laptop overheating rapidly",
             "Docking station not detected",
             "Keyboard keys unresponsive",
             "Monitor stays black after boot",
+            "Battery drains in under one hour",
+            "USB-C hub disconnecting randomly",
+            "Webcam not detected in meetings",
         ],
         "Network": [
             "VPN disconnects every 10 minutes",
             "Wi-Fi authentication loop",
             "Cannot reach intranet portal",
             "Packet loss on video calls",
+            "DNS lookup latency is high",
+            "Intermittent proxy timeout",
+            "Office subnet cannot reach printer VLAN",
         ],
     }
     resolution_templates = {
@@ -292,11 +339,15 @@ def seed_demo_data(db: Session, per_category: int = 30) -> dict:
         for i in range(per_category):
             created_date = now.replace(microsecond=0)
             created_date = created_date.replace(day=max(1, (created_date.day - (i % 20))))
-            status = random.choices(statuses, weights=[4, 4, 5], k=1)[0]
+            status = random.choices(statuses, weights=[5, 5, 6], k=1)[0]
             title = random.choice(issue_templates[category_name])
-            description = f"{title}. User reported issue in {category_name.lower()} workflow. Case #{i+1}."
+            description = (
+                f"{title}. User reported issue in {category_name.lower()} workflow. "
+                f"Impact: {'team blocked' if i % 4 == 0 else 'single user degraded'}. "
+                f"Environment: {'remote' if i % 3 == 0 else 'office'}. Case #{i+1}."
+            )
             ticket = Ticket(
-                user_id=admin.user_id,
+                user_id=random.choice([admin.user_id, employee.user_id]),
                 category_id=category.category_id,
                 title=title,
                 description=description,
@@ -350,8 +401,8 @@ def seed_demo_data(db: Session, per_category: int = 30) -> dict:
 @app.on_event("startup")
 def startup_event() -> None:
     with SessionLocal() as db:
-        has_user = db.query(User).count() > 0
-        if not has_user:
+        admin = db.query(User).filter(User.email == ADMIN_EMAIL).first()
+        if not admin:
             admin = User(
                 name="System Admin",
                 email=ADMIN_EMAIL,
@@ -360,7 +411,26 @@ def startup_event() -> None:
                 department="IT",
             )
             db.add(admin)
-            db.commit()
+        else:
+            admin.password_hash = hash_password(ADMIN_PASSWORD)
+            admin.role = "admin"
+            admin.department = "IT"
+
+        second_admin = db.query(User).filter(User.email == SECOND_ADMIN_EMAIL).first()
+        if not second_admin:
+            second_admin = User(
+                name="Tazeema Admin",
+                email=SECOND_ADMIN_EMAIL,
+                password_hash=hash_password(SECOND_ADMIN_PASSWORD),
+                role="admin",
+                department="IT",
+            )
+            db.add(second_admin)
+        else:
+            second_admin.password_hash = hash_password(SECOND_ADMIN_PASSWORD)
+            second_admin.role = "admin"
+            second_admin.department = "IT"
+        db.commit()
         recommender.rebuild_cache(db)
 
 
@@ -374,6 +444,36 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == payload.email).first()
     if not user or user.password_hash != hash_password(payload.password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
+    if payload.expected_role and user.role != payload.expected_role:
+        raise HTTPException(status_code=403, detail=f"Use {user.role} portal for this account")
+
+    token = secrets.token_urlsafe(24)
+    auth_tokens[token] = user.user_id
+    return {
+        "token": token,
+        "user": {"user_id": user.user_id, "name": user.name, "email": user.email, "role": user.role},
+    }
+
+
+@app.post("/api/auth/register")
+def register(payload: RegisterRequest, db: Session = Depends(get_db)):
+    email = payload.email.strip().lower()
+    if db.query(User).filter(User.email == email).first():
+        raise HTTPException(status_code=409, detail="Email already exists")
+
+    if email in {ADMIN_EMAIL.lower(), SECOND_ADMIN_EMAIL.lower()}:
+        raise HTTPException(status_code=403, detail="This email is reserved")
+
+    user = User(
+        name=payload.name.strip(),
+        email=email,
+        password_hash=hash_password(payload.password),
+        role="user",
+        department=payload.department.strip() or "General",
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
 
     token = secrets.token_urlsafe(24)
     auth_tokens[token] = user.user_id
@@ -505,19 +605,55 @@ def analytics_overview(
 
 @app.get("/api/tickets")
 def api_tickets(
+    status: str | None = None,
+    category: str | None = None,
+    priority: str | None = None,
+    q: str | None = None,
     _: User = Depends(require_admin_user),
     db: Session = Depends(get_db),
 ):
-    rows = (
+    base = (
         db.query(Ticket, Category, Resolution)
         .join(Category, Category.category_id == Ticket.category_id)
         .outerjoin(Resolution, Resolution.ticket_id == Ticket.ticket_id)
-        .order_by(Ticket.created_date.desc())
-        .all()
     )
+    if status:
+        base = base.filter(Ticket.status == status)
+    if category:
+        base = base.filter(Category.name == category)
+    if priority:
+        base = base.filter(Ticket.priority == priority)
+    if q:
+        like = f"%{q}%"
+        base = base.filter((Ticket.title.ilike(like)) | (Ticket.description.ilike(like)))
+
+    rows = base.order_by(Ticket.created_date.desc()).all()
+
+    if not recommender.is_ready:
+        recommender.rebuild_cache(db)
+
+    category_playbook = {
+        "Software": "Check logs, restart app services, and validate recent patch impact.",
+        "Access": "Revalidate IAM role mapping, refresh auth tokens, and verify group sync.",
+        "Hardware": "Run hardware diagnostics and validate power/cable/peripheral chain.",
+        "Network": "Validate VPN/DNS path, then test route/firewall and local adapter health.",
+    }
     by_ticket: dict[int, dict] = {}
     for t, c, r in rows:
         if t.ticket_id not in by_ticket:
+            suggested = ""
+            if r:
+                suggested = r.resolution_text
+            else:
+                nlp = recommender.get_recommendations(
+                    f"{t.title} {t.description}",
+                    top_k=1,
+                    min_score=0.05,
+                )
+                if nlp:
+                    suggested = nlp[0]["resolution_text"]
+                else:
+                    suggested = category_playbook.get(c.name, "Use NLP workbench for guided troubleshooting.")
             by_ticket[t.ticket_id] = {
                 "ticket_id": t.ticket_id,
                 "title": t.title,
@@ -530,16 +666,199 @@ def api_tickets(
                 "resolved_date": t.resolved_date,
                 "resolution_text": "",
                 "resolution_id": None,
+                "ai_suggestion": suggested,
             }
         if r and not by_ticket[t.ticket_id]["resolution_text"]:
             by_ticket[t.ticket_id]["resolution_text"] = r.resolution_text
             by_ticket[t.ticket_id]["resolution_id"] = r.resolution_id
+            by_ticket[t.ticket_id]["ai_suggestion"] = r.resolution_text
     return list(by_ticket.values())
+
+
+@app.get("/api/user/tickets")
+def api_user_tickets(
+    status: str | None = None,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    rows = (
+        db.query(Ticket, Category, Resolution)
+        .join(Category, Category.category_id == Ticket.category_id)
+        .outerjoin(Resolution, Resolution.ticket_id == Ticket.ticket_id)
+        .filter(Ticket.user_id == user.user_id)
+        .order_by(Ticket.created_date.desc())
+        .all()
+    )
+
+    if not recommender.is_ready:
+        recommender.rebuild_cache(db)
+
+    by_ticket: dict[int, dict] = {}
+    for t, c, r in rows:
+        if status and t.status != status:
+            continue
+        if t.ticket_id not in by_ticket:
+            nlp = recommender.get_recommendations(f"{t.title} {t.description}", top_k=1, min_score=0.05)
+            suggested = nlp[0]["resolution_text"] if nlp else "NLP analysis available in workbench."
+            by_ticket[t.ticket_id] = {
+                "ticket_id": t.ticket_id,
+                "title": t.title,
+                "description": t.description,
+                "category": c.name,
+                "status": t.status,
+                "priority": t.priority,
+                "created_date": t.created_date,
+                "resolved_date": t.resolved_date,
+                "resolution_text": "",
+                "ai_suggestion": suggested,
+            }
+        if r and not by_ticket[t.ticket_id]["resolution_text"]:
+            by_ticket[t.ticket_id]["resolution_text"] = r.resolution_text
+            by_ticket[t.ticket_id]["ai_suggestion"] = r.resolution_text
+    return list(by_ticket.values())
+
+
+@app.post("/api/user/tickets")
+def api_create_user_ticket(
+    payload: UserTicketCreateRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    category = (
+        db.query(Category)
+        .filter(Category.name.ilike(payload.category.strip()))
+        .first()
+    )
+    if not category:
+        raise HTTPException(status_code=400, detail="Invalid category")
+
+    priority = payload.priority.lower()
+    if priority not in {"low", "med", "high"}:
+        priority = "med"
+
+    ticket = Ticket(
+        user_id=user.user_id,
+        category_id=category.category_id,
+        title=payload.issue.strip(),
+        description=payload.description.strip(),
+        priority=priority,
+        status="Open",
+        created_date=datetime.utcnow(),
+        updated_date=datetime.utcnow(),
+    )
+    db.add(ticket)
+    db.commit()
+    db.refresh(ticket)
+    return {"ticket_id": ticket.ticket_id, "created": True}
+
+
+@app.post("/api/user/tickets/{ticket_id}/resolve")
+def api_user_resolve_ticket(
+    ticket_id: int,
+    payload: UserTicketResolveRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    ticket = (
+        db.query(Ticket)
+        .filter(Ticket.ticket_id == ticket_id, Ticket.user_id == user.user_id)
+        .first()
+    )
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+
+    old_status = ticket.status
+    ticket.status = "Resolved"
+    ticket.resolved_date = datetime.utcnow()
+    ticket.updated_date = datetime.utcnow()
+    db.add(
+        TicketStatusLog(
+            ticket_id=ticket.ticket_id,
+            changed_by=user.user_id,
+            old_status=old_status,
+            new_status="Resolved",
+            changed_at=datetime.utcnow(),
+            note="Resolved from user portal",
+        )
+    )
+    db.add(
+        Resolution(
+            ticket_id=ticket.ticket_id,
+            added_by=user.user_id,
+            resolution_text=payload.resolution.strip(),
+            resolved_date=datetime.utcnow(),
+            helpful_count=0,
+            is_verified=False,
+        )
+    )
+    db.commit()
+    recommender.rebuild_cache(db)
+    return {"ticket_id": ticket.ticket_id, "status": ticket.status, "updated": True}
+
+
+@app.put("/api/tickets/{ticket_id}")
+def api_update_ticket(
+    ticket_id: int,
+    payload: TicketUpdateRequest,
+    admin: User = Depends(require_admin_user),
+    db: Session = Depends(get_db),
+):
+    ticket = db.query(Ticket).filter(Ticket.ticket_id == ticket_id).first()
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+
+    valid_statuses = {"Open", "In Progress", "Resolved"}
+    if payload.status not in valid_statuses:
+        raise HTTPException(status_code=400, detail="Invalid status")
+
+    old_status = ticket.status
+    ticket.status = payload.status
+    ticket.updated_date = datetime.utcnow()
+    if payload.status == "Resolved":
+        ticket.resolved_date = datetime.utcnow()
+    elif old_status == "Resolved":
+        ticket.resolved_date = None
+
+    if old_status != payload.status:
+        db.add(
+            TicketStatusLog(
+                ticket_id=ticket.ticket_id,
+                changed_by=admin.user_id,
+                old_status=old_status,
+                new_status=payload.status,
+                changed_at=datetime.utcnow(),
+                note="Updated from admin dashboard",
+            )
+        )
+
+    resolution_text = (payload.resolution or "").strip()
+    if resolution_text:
+        latest_resolution = (
+            db.query(Resolution)
+            .filter(Resolution.ticket_id == ticket.ticket_id)
+            .order_by(Resolution.resolved_date.desc())
+            .first()
+        )
+        if not latest_resolution or latest_resolution.resolution_text != resolution_text:
+            db.add(
+                Resolution(
+                    ticket_id=ticket.ticket_id,
+                    added_by=admin.user_id,
+                    resolution_text=resolution_text,
+                    resolved_date=datetime.utcnow(),
+                    helpful_count=0,
+                    is_verified=(payload.status == "Resolved"),
+                )
+            )
+
+    db.commit()
+    recommender.rebuild_cache(db)
+    return {"updated": True, "ticket_id": ticket.ticket_id, "status": ticket.status}
 
 
 @app.get("/nlp", response_class=HTMLResponse)
 def nlp_page() -> str:
-    page_path = Path(__file__).resolve().parent.parent / "api" / "pages" / "nlp.html"
+    page_path = Path(__file__).resolve().parent / "pages" / "nlp.html"
     if not page_path.exists():
         raise HTTPException(status_code=500, detail=f"Missing page file: {page_path}")
     return page_path.read_text(encoding="utf-8")

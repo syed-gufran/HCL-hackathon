@@ -1,27 +1,49 @@
 import React, { useState, useEffect } from 'react';
 import { Terminal, Sparkles, ShieldCheck, Zap, ArrowRight, Mail, Lock, User, Shield } from 'lucide-react';
-import { loginRequest } from '../api/auth';
+import { loginRequest, registerRequest } from '../api/auth';
 
 export default function Login({ onLoginSuccess }) {
   const [role, setRole] = useState('user');
   const [isLoading, setIsLoading] = useState(false);
   const [loginSuccess, setLoginSuccess] = useState(false);
   const [error, setError] = useState('');
-  const [email, setEmail] = useState('admin@company.com');
-  const [password, setPassword] = useState('admin123');
+  const [info, setInfo] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [session, setSession] = useState(null);
+  const [authMode, setAuthMode] = useState('login');
+  const [name, setName] = useState('New Employee');
+  const [department, setDepartment] = useState('Operations');
 
   const handleLogin = async (e) => {
     e.preventDefault();
     setError('');
+    setInfo('');
     setIsLoading(true);
     try {
-      const data = await loginRequest(email, password);
+      const data = await loginRequest(email, password, role);
       setSession(data);
       setRole(data.user.role);
       setLoginSuccess(true);
     } catch (err) {
       setError(err.message || 'Login failed');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleRegister = async (e) => {
+    e.preventDefault();
+    setError('');
+    setInfo('');
+    setIsLoading(true);
+    try {
+      const data = await registerRequest(name, email, password, department);
+      setSession(data);
+      setRole('user');
+      setLoginSuccess(true);
+    } catch (err) {
+      setError(err.message || 'Registration failed');
     } finally {
       setIsLoading(false);
     }
@@ -109,11 +131,23 @@ export default function Login({ onLoginSuccess }) {
           </div>
 
           <div className="flex p-1 bg-[#111115] border border-zinc-800/80 rounded-lg mb-8 shadow-inner">
-            <button onClick={() => setRole('user')} className={`flex-1 flex items-center justify-center gap-2 py-2.5 text-xs font-semibold rounded-md transition-all ${role === 'user' ? 'bg-zinc-800 text-white shadow-md' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50'}`}><User size={14} />Employee</button>
-            <button onClick={() => setRole('admin')} className={`flex-1 flex items-center justify-center gap-2 py-2.5 text-xs font-semibold rounded-md transition-all ${role === 'admin' ? 'bg-zinc-800 text-white shadow-md' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50'}`}><Shield size={14} />IT Admin</button>
+            <button onClick={() => { setRole('user'); setAuthMode('login'); }} className={`flex-1 flex items-center justify-center gap-2 py-2.5 text-xs font-semibold rounded-md transition-all ${role === 'user' ? 'bg-zinc-800 text-white shadow-md' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50'}`}><User size={14} />Employee</button>
+            <button onClick={() => { setRole('admin'); setAuthMode('login'); }} className={`flex-1 flex items-center justify-center gap-2 py-2.5 text-xs font-semibold rounded-md transition-all ${role === 'admin' ? 'bg-zinc-800 text-white shadow-md' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50'}`}><Shield size={14} />IT Admin</button>
           </div>
 
-          <form onSubmit={handleLogin} className="space-y-5">
+          <form onSubmit={authMode === 'register' && role === 'user' ? handleRegister : handleLogin} className="space-y-5">
+            {role === 'user' && authMode === 'register' ? (
+              <>
+                <div>
+                  <label className="text-xs font-semibold text-zinc-400 mb-2 block uppercase tracking-wider">Full Name</label>
+                  <input type="text" value={name} onChange={(e) => setName(e.target.value)} required className="w-full px-4 py-2.5 bg-[#111115] border border-zinc-800/80 rounded-md text-sm text-white focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/50 transition-all shadow-inner" />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-zinc-400 mb-2 block uppercase tracking-wider">Department</label>
+                  <input type="text" value={department} onChange={(e) => setDepartment(e.target.value)} required className="w-full px-4 py-2.5 bg-[#111115] border border-zinc-800/80 rounded-md text-sm text-white focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/50 transition-all shadow-inner" />
+                </div>
+              </>
+            ) : null}
             <div>
               <label className="text-xs font-semibold text-zinc-400 mb-2 block uppercase tracking-wider">Corporate Email</label>
               <div className="relative group">
@@ -124,7 +158,16 @@ export default function Login({ onLoginSuccess }) {
             <div>
               <div className="flex justify-between items-center mb-2">
                 <label className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Password</label>
-                <a href="#" className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">Forgot?</a>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setError('');
+                    setInfo('For password updates, email tazeema07@gmail.com');
+                  }}
+                  className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
+                >
+                  Forgot?
+                </button>
               </div>
               <div className="relative group">
                 <Lock className="absolute left-3 top-2.5 text-zinc-500 group-focus-within:text-indigo-400 transition-colors" size={16} />
@@ -132,9 +175,25 @@ export default function Login({ onLoginSuccess }) {
               </div>
             </div>
             {error ? <p className="text-xs text-red-400">{error}</p> : null}
+            {info ? <p className="text-xs text-emerald-400">{info}</p> : null}
             <button type="submit" disabled={isLoading} className="w-full py-3 mt-4 bg-white text-black font-bold rounded-md hover:bg-zinc-200 transition-all text-sm flex items-center justify-center gap-2 disabled:opacity-70 group shadow-[0_0_15px_rgba(255,255,255,0.1)] hover:shadow-[0_0_20px_rgba(255,255,255,0.3)]">
-              {isLoading ? <div className="w-5 h-5 border-2 border-black border-t-transparent rounded-full animate-spin" /> : <>Sign In to {role === 'admin' ? 'Admin Portal' : 'User Portal'} <ArrowRight size={16} className="group-hover:translate-x-1 transition-transform" /></>}
+              {isLoading ? <div className="w-5 h-5 border-2 border-black border-t-transparent rounded-full animate-spin" /> : <>{role === 'user' && authMode === 'register' ? 'Create Account' : `Sign In to ${role === 'admin' ? 'Admin Portal' : 'User Portal'}`} <ArrowRight size={16} className="group-hover:translate-x-1 transition-transform" /></>}
             </button>
+            {role === 'user' ? (
+              <p className="text-xs text-zinc-400 text-center">
+                {authMode === 'register' ? (
+                  <>
+                    Already registered?{' '}
+                    <button type="button" onClick={() => setAuthMode('login')} className="text-indigo-400 hover:text-indigo-300">Sign in</button>
+                  </>
+                ) : (
+                  <>
+                    New user?{' '}
+                    <button type="button" onClick={() => setAuthMode('register')} className="text-indigo-400 hover:text-indigo-300">Register</button>
+                  </>
+                )}
+              </p>
+            ) : null}
           </form>
 
           <div className="mt-8 p-4 bg-indigo-500/5 border border-indigo-500/10 rounded-md text-center backdrop-blur-sm">

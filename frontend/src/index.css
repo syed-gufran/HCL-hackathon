@@ -1,3 +1,45 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* Stronger cursor/focus visibility for dark UI */
+html,
+body,
+#root {
+  cursor: default;
+}
+
+input,
+textarea,
+select {
+  caret-color: #f8fafc;
+}
+
+button,
+a,
+[role="button"],
+label[for],
+select,
+summary {
+  cursor: pointer;
+}
+
+button:hover,
+a:hover,
+[role="button"]:hover {
+  filter: brightness(1.08);
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: 2px solid #38bdf8 !important;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.3);
+}
+
+tr:hover {
+  cursor: pointer;
+}

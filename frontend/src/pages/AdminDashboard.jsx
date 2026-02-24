@@ -2,11 +2,15 @@ import React, { useState, useMemo } from 'react';
 import { PieChart, Pie, Cell, Tooltip as RechartsTooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
 import { Terminal, LayoutDashboard, Ticket as TicketIcon, LogOut, Clock, AlertCircle, CheckCircle, X, RefreshCw } from 'lucide-react';
 import { COLORS } from '../data/mockData';
+import { updateAdminTicket } from '../api/admin';
 
-export default function AdminDashboard({ tickets, setTickets, onLogout, analytics, loading, error, onRefresh }) {
+export default function AdminDashboard({ tickets, setTickets, onLogout, analytics, loading, error, onRefresh, token }) {
   const [currentView, setCurrentView] = useState('dashboard');
   const [selectedTicket, setSelectedTicket] = useState(null);
   const [editForm, setEditForm] = useState({ status: '', resolution: '' });
+  const [saveError, setSaveError] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [filters, setFilters] = useState({ status: 'All', category: 'All', priority: 'All', q: '' });
 
   const pendingCount = analytics?.pending_tickets ?? tickets.filter((t) => t.status !== 'Resolved').length;
   const resolvedCount = analytics?.resolved_tickets ?? tickets.filter((t) => t.status === 'Resolved').length;
@@ -18,6 +22,27 @@ export default function AdminDashboard({ tickets, setTickets, onLogout, analytic
   const dailyVolume = analytics?.daily_volume || [];
   const categoryRates = analytics?.category_resolution_rates || [];
   const topResolutions = analytics?.top_resolutions || [];
+  const tooltipStyle = {
+    backgroundColor: '#f8fafc',
+    border: '1px solid #94a3b8',
+    color: '#0f172a',
+    borderRadius: '8px',
+    fontSize: '12px',
+  };
+  const filteredTickets = useMemo(() => {
+    return tickets.filter((t) => {
+      const idText = `${t.id || ''} ${t.ticket_id || ''}`.toLowerCase();
+      const textBlob = `${t.issue} ${t.description}`.toLowerCase();
+      if (filters.status !== 'All' && t.status !== filters.status) return false;
+      if (filters.category !== 'All' && t.category !== filters.category) return false;
+      if (filters.priority !== 'All' && t.priority !== filters.priority) return false;
+      if (filters.q) {
+        const q = filters.q.toLowerCase().trim();
+        if (!idText.includes(q) && !textBlob.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [tickets, filters]);
 
   const categoryData = useMemo(() => {
     if (analytics?.category_distribution) return analytics.category_distribution;
@@ -33,9 +58,22 @@ export default function AdminDashboard({ tickets, setTickets, onLogout, analytic
     setEditForm({ status: ticket.status, resolution: ticket.resolution });
   };
 
-  const handleSave = () => {
-    setTickets(tickets.map((t) => (t.id === selectedTicket.id ? { ...t, status: editForm.status, resolution: editForm.resolution } : t)));
-    setSelectedTicket(null);
+  const handleSave = async () => {
+    if (!selectedTicket?.ticket_id) {
+      setSaveError('Missing ticket id');
+      return;
+    }
+    setSaveError('');
+    setSaving(true);
+    try {
+      await updateAdminTicket(token, selectedTicket.ticket_id, editForm.status, editForm.resolution);
+      await onRefresh();
+      setSelectedTicket(null);
+    } catch (err) {
+      setSaveError(err.message || 'Failed to save ticket');
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -79,7 +117,7 @@ export default function AdminDashboard({ tickets, setTickets, onLogout, analytic
                     <Pie data={categoryData} dataKey="value" cx="50%" cy="50%" innerRadius={70} outerRadius={90}>
                       {categoryData.map((entry, i) => <Cell key={entry.name} fill={COLORS[i % COLORS.length]} />)}
                     </Pie>
-                    <RechartsTooltip contentStyle={{ backgroundColor: '#18181b', border: 'none', color: '#fff' }} />
+                    <RechartsTooltip contentStyle={tooltipStyle} />
                   </PieChart>
                 </ResponsiveContainer>
               </div>
@@ -90,7 +128,7 @@ export default function AdminDashboard({ tickets, setTickets, onLogout, analytic
                     <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
                     <XAxis dataKey="name" stroke="#a1a1aa" />
                     <YAxis stroke="#a1a1aa" />
-                    <RechartsTooltip contentStyle={{ backgroundColor: '#18181b', border: 'none', color: '#fff' }} />
+                    <RechartsTooltip contentStyle={tooltipStyle} />
                     <Bar dataKey="value" fill="#818cf8" />
                   </BarChart>
                 </ResponsiveContainer>
@@ -104,7 +142,7 @@ export default function AdminDashboard({ tickets, setTickets, onLogout, analytic
                     <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
                     <XAxis dataKey="date" stroke="#a1a1aa" hide />
                     <YAxis stroke="#a1a1aa" />
-                    <RechartsTooltip contentStyle={{ backgroundColor: '#18181b', border: 'none', color: '#fff' }} />
+                    <RechartsTooltip contentStyle={tooltipStyle} />
                     <Bar dataKey="count" fill="#34d399" />
                   </BarChart>
                 </ResponsiveContainer>
@@ -141,12 +179,24 @@ export default function AdminDashboard({ tickets, setTickets, onLogout, analytic
                 <RefreshCw size={14} /> Refresh
               </button>
             </div>
+            <div className="grid grid-cols-4 gap-3 mb-4">
+              <select value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })} className="bg-[#111115] border border-zinc-800 rounded px-3 py-2 text-xs">
+                <option>All</option><option>Open</option><option>In Progress</option><option>Resolved</option>
+              </select>
+              <select value={filters.category} onChange={(e) => setFilters({ ...filters, category: e.target.value })} className="bg-[#111115] border border-zinc-800 rounded px-3 py-2 text-xs">
+                <option>All</option><option>Software</option><option>Access</option><option>Hardware</option><option>Network</option>
+              </select>
+              <select value={filters.priority} onChange={(e) => setFilters({ ...filters, priority: e.target.value })} className="bg-[#111115] border border-zinc-800 rounded px-3 py-2 text-xs">
+                <option>All</option><option>low</option><option>med</option><option>high</option>
+              </select>
+              <input value={filters.q} onChange={(e) => setFilters({ ...filters, q: e.target.value })} placeholder="Search by ticket ID or text (e.g. T-120)" className="bg-[#111115] border border-zinc-800 rounded px-3 py-2 text-xs" />
+            </div>
             <div className="bg-[#111115] rounded-lg border border-zinc-800 flex-1 overflow-auto">
               <table className="w-full text-left">
                 <thead className="bg-[#0B0B0F] border-b border-zinc-800"><tr><th className="p-4 text-xs text-zinc-500">ID</th><th className="p-4 text-xs text-zinc-500">Issue</th><th className="p-4 text-xs text-zinc-500">Category</th><th className="p-4 text-xs text-zinc-500">Priority</th><th className="p-4 text-xs text-zinc-500">Status</th></tr></thead>
                 <tbody className="divide-y divide-zinc-800/60">
-                  {tickets.map((t) => (
-                    <tr key={t.id} onClick={() => handleRowClick(t)} className="hover:bg-zinc-800/30 cursor-pointer">
+                  {filteredTickets.map((t) => (
+                    <tr key={t.id} onClick={() => handleRowClick(t)} className="cursor-pointer transition-colors hover:bg-sky-500/15 hover:ring-1 hover:ring-sky-400/30">
                       <td className="p-4 font-mono text-xs text-zinc-400">{t.id}</td><td className="p-4 text-sm">{t.issue}</td><td className="p-4 text-xs text-zinc-300">{t.category}</td><td className="p-4 text-xs text-zinc-300 uppercase">{t.priority}</td>
                       <td className="p-4"><span className="px-2 py-1 text-xs border border-zinc-700 bg-zinc-800 rounded">{t.status}</span></td>
                     </tr>
@@ -165,7 +215,8 @@ export default function AdminDashboard({ tickets, setTickets, onLogout, analytic
                     <div><label className="text-xs text-zinc-500 block mb-2">Status</label><div className="flex gap-2">{['Open', 'In Progress', 'Resolved'].map((s) => <button key={s} onClick={() => setEditForm({ ...editForm, status: s })} className={`flex-1 py-2 rounded text-sm border ${editForm.status === s ? 'bg-white text-black' : 'border-zinc-800 text-zinc-400'}`}>{s}</button>)}</div></div>
                     <div><label className="text-xs text-zinc-500 block mb-2">Resolution Note</label><textarea value={editForm.resolution} onChange={(e) => setEditForm({ ...editForm, resolution: e.target.value })} className="w-full p-3 bg-[#111115] border border-zinc-800 rounded text-sm text-white resize-none h-24" /></div>
                   </div>
-                  <button onClick={handleSave} className="w-full mt-4 py-3 bg-white text-black font-semibold rounded hover:bg-zinc-200">Save Changes</button>
+                  {saveError ? <p className="text-xs text-red-400 mt-2">{saveError}</p> : null}
+                  <button onClick={handleSave} disabled={saving} className="w-full mt-4 py-3 bg-white text-black font-semibold rounded hover:bg-zinc-200 disabled:opacity-70">{saving ? 'Saving...' : 'Save Changes'}</button>
                 </div>
               </div>
             )}
